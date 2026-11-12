@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import {
   Layers,
   Search,
@@ -23,7 +23,8 @@ import {
   Edit3,
   Trash2,
   X,
-  Check
+  Check,
+  Download
 } from 'lucide-react';
 import { collection, doc, setDoc, deleteDoc, onSnapshot } from 'firebase/firestore';
 import { db } from '../firebase/config';
@@ -872,6 +873,68 @@ export const ProjectList: React.FC<ProjectListProps> = ({
   const totalLoggedHours = activePortfolioProjects.reduce((sum, p) => sum + getProjectDynamicLoggedHours(p), 0);
   const totalEstimatedHours = activePortfolioProjects.reduce((sum, p) => sum + getProjectTargetHours(p), 0);
 
+  // CSV Export state & generation logic
+  const [exportScope, setExportScope] = useState<'all' | 'wip' | 'filtered'>('all');
+
+  const handleExportCsv = (scope: 'all' | 'wip' | 'filtered' = exportScope) => {
+    let targetList: BimProject[] = [];
+    let fileSuffix = 'all';
+
+    if (scope === 'wip') {
+      targetList = activePortfolioProjects.filter((p) => p.status === 'WIP');
+      fileSuffix = 'wip_only';
+    } else if (scope === 'filtered') {
+      targetList = filteredProjects;
+      fileSuffix = statusFilter === 'all' ? 'current_view' : `${statusFilter.toLowerCase().replace(/\s+/g, '_')}_view`;
+    } else {
+      targetList = activePortfolioProjects;
+      fileSuffix = 'all_projects';
+    }
+
+    const headers = [
+      'Project Name',
+      'Status',
+      'Total Hours Logged',
+      'Estimated Hours',
+      'Changed/Additional Hours',
+      'Planned Delivery Date',
+    ];
+
+    const escapeCsv = (val: string | number | undefined | null): string => {
+      if (val === undefined || val === null) return '""';
+      const clean = String(val).replace(/"/g, '""');
+      return `"${clean}"`;
+    };
+
+    const rows = targetList.map((p) => {
+      const logged = getProjectDynamicLoggedHours(p);
+      const estimated = getProjectEstimatedHours(p);
+      const changed = getProjectChangedHours(p);
+      const plannedDate = p.plannedDeliveryDate || p.targetCompletionDate || 'N/A';
+
+      return [
+        escapeCsv(p.name || 'Unnamed Project'),
+        escapeCsv(p.status || 'WIP'),
+        escapeCsv(Number(logged.toFixed(1))),
+        escapeCsv(Number(estimated.toFixed(1))),
+        escapeCsv(Number(changed.toFixed(1))),
+        escapeCsv(plannedDate),
+      ].join(',');
+    });
+
+    const csvContent = [headers.map(escapeCsv).join(','), ...rows].join('\r\n');
+    const blob = new Blob(['\uFEFF' + csvContent], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const dateStr = new Date().toISOString().slice(0, 10);
+    const link = document.createElement('a');
+    link.href = url;
+    link.setAttribute('download', `bim_projects_${fileSuffix}_${dateStr}.csv`);
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
+  };
+
   return (
     <div className="space-y-6 pb-12">
       {/* Header & Controls */}
@@ -993,7 +1056,7 @@ export const ProjectList: React.FC<ProjectListProps> = ({
           </div>
         </div>
 
-        {/* Status Filter buttons */}
+        {/* Status Filter buttons & Export CSV */}
         <div
           className="flex items-center gap-2 overflow-x-auto max-w-full"
           style={{ minWidth: 'fit-content', flexShrink: 0 }}
@@ -1017,6 +1080,41 @@ export const ProjectList: React.FC<ProjectListProps> = ({
                 </button>
               );
             })}
+          </div>
+
+          {/* Export CSV Control placed horizontally to the right of status filter tabs */}
+          <div className="flex items-center bg-slate-800 border border-slate-700 rounded-lg p-1 text-xs shrink-0 shadow-xs">
+            <button
+              type="button"
+              onClick={() => handleExportCsv(exportScope)}
+              className="flex items-center gap-1.5 px-2.5 py-1 rounded bg-slate-700/80 hover:bg-slate-700 text-slate-200 hover:text-white font-medium transition cursor-pointer"
+              title="Download CSV spreadsheet matching active table columns"
+            >
+              <Download className="w-3.5 h-3.5 text-emerald-400" />
+              <span>Export CSV</span>
+            </button>
+            <div className="h-4 w-px bg-slate-700 mx-1.5" />
+            <select
+              aria-label="Export CSV scope"
+              value={exportScope}
+              onChange={(e) => {
+                const scope = e.target.value as 'all' | 'wip' | 'filtered';
+                setExportScope(scope);
+                handleExportCsv(scope);
+              }}
+              className="bg-transparent text-slate-300 hover:text-white text-xs font-medium focus:outline-none cursor-pointer pr-1"
+              title="Select CSV export dataset: All Projects, WIP Only, or Current View"
+            >
+              <option value="all" className="bg-slate-900 text-slate-200">
+                All Projects ({activePortfolioProjects.length})
+              </option>
+              <option value="wip" className="bg-slate-900 text-cyan-300">
+                WIP Only ({activePortfolioProjects.filter((p) => p.status === 'WIP').length})
+              </option>
+              <option value="filtered" className="bg-slate-900 text-slate-300">
+                Current View ({filteredProjects.length})
+              </option>
+            </select>
           </div>
         </div>
       </div>
